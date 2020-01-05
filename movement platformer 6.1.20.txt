@@ -1,0 +1,502 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using CodeMonkey.Utils;
+
+public class MovementPlatformer : MonoBehaviour
+{
+
+    public float speed;         // moving an jumping vars
+    public float jumpV;
+    private float moveInput;
+    private float moveInputVertical;
+    public Vector2 directionPressed;
+    public float jumpMemory = 0.2f;
+    public float groundedMemory = 0.2f;
+    public float fHorDmpBasic;
+    public float fHorDmpStopping;
+    public float fHorDmpTurning;
+    private float fHorizontalVelocity;
+    private float dashTime;             // dashing duration, and the duration of the drag after dashing 
+    private float dashDrag;
+    private float dragTime;
+    private float wallSlideMemory;
+    private float wallSlideDuration;
+    private float wallSlideDirectionInput;
+    private float wallSlideDirectionSwitch;
+    private float wallJumpTime;
+    private float wallJumpMemory;
+    private bool dashFromAir;
+    private bool dashStopSide;
+    private bool dashStopBottom;
+    private bool doneDashing;
+    private float timer;
+    private bool wallJumpingRightNow;
+
+   
+    public float superJumpTime;             //brown special move
+    public float superJumpSpeed;
+
+    public GameObject BlueBlock;
+
+    private bool facingRight = true;
+    private bool isGrounded;                // bools for jumping 
+    private bool isGrounded2;
+    private bool isWallSliding = false;
+    public Transform groundCheck;           // objects for checking if the player touches the ground/wall.
+    public Transform wallCheck;
+    public float wallCheckDistance;
+    public float checkRadius;
+    private RaycastHit2D wallCheckHit;
+    public LayerMask whatIsGround;
+    private Vector2 dashTowards;            // vectors for the dash move
+    private Vector2 dashTargetPos;
+    private bool dashFromAWall;
+
+    public Transform shootingPoint;
+    public GameObject bulletPrefab;
+    public bool canTeleport = false;
+    
+    private State state;
+
+    private enum State              // all of the states available for the character
+    {
+        Normal,
+        Dashing,
+        DashBump,
+        WallJumping,
+        Brown,
+        Green,
+        White,
+        Black,
+        Blue,
+    }
+
+    public Rigidbody2D rb;
+
+    void Start()
+    {
+        rb = GetComponent<Rigidbody2D>();
+
+    }
+
+    private void Awake()
+    {
+        SetStateNormal();
+
+    }
+
+    void Update()
+    {
+
+        switch (state)
+        {
+            case State.Normal:              // actions available in normal state
+                JumpMemory();
+                JumpNow1();
+                DashStart();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                SwitchStates();
+                ShootStart();
+                break;
+            case State.Dashing:
+                Dash();
+                break;
+            case State.WallJumping:
+                WallJumpActive();
+                break;
+            case State.DashBump:
+                DashBumping();
+                break;
+            case State.Brown:
+                JumpMemory();
+                JumpNow1();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                //SuperJump();
+                SuperJumpStart();
+                SwitchStates();
+                break;
+            case State.Green:
+                JumpNow1();
+                JumpMemory();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                //Leech();
+                //LeechSwing();
+                SwitchStates();
+                break;
+            case State.White:
+                JumpMemory();
+                JumpNow1();
+                DashStart();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                SwitchStates();
+                break;
+            case State.Black:
+                JumpMemory();
+                JumpNow1();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                //DownSlide();
+                SwitchStates();
+                break;
+            case State.Blue:
+                JumpMemory();
+                JumpNow1();
+                Move();
+                WallSlideCheck();
+                WallJumpStart();
+                CreateBlock();
+                SwitchStates();
+                break;
+
+        }
+
+        if (facingRight == false && moveInput > 0)          //flip the character while switching directions
+        {
+            Flip();
+        }
+        else if (facingRight == true && moveInput < 0)
+        {
+            Flip();
+        }
+
+    }
+
+    void FixedUpdate()
+    {
+
+        isGrounded = Physics2D.OverlapCircle(groundCheck.position, checkRadius, whatIsGround);
+
+        wallCheckHit = Physics2D.Raycast(wallCheck.position, wallCheck.right, wallCheckDistance, whatIsGround);
+
+        if (doneDashing)
+        {
+            Time.timeScale = 0;
+            StartCoroutine(DashPause(0.03f));
+            dashDrag = 0.12f;
+            dashDrag -= Time.deltaTime;
+            if (dashDrag > 0)
+                rb.velocity = new Vector2(0, 0);
+        }
+        if (dashDrag <= 0 || !doneDashing)
+            rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y);
+
+        if (!wallCheckHit && wallSlideMemory > 0)
+            wallSlideMemory -= Time.deltaTime;
+
+        if (isWallSliding && wallCheckHit)
+        {
+
+            rb.drag = 10f;
+
+        }
+        else if (!isWallSliding || !wallCheckHit)
+            rb.drag = 0f;
+
+
+        
+
+
+    }
+
+    private void SetStateNormal()
+    {
+        state = State.Normal;
+
+    }
+
+
+    void Flip()
+    {
+        facingRight = !facingRight;
+        transform.Rotate(0.0f, 180.0f, 0.0f);
+    }
+
+    private void DashStart()                //preparing conditions for the dash move
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            doneDashing = false;
+            dashTime = 0.08f;
+            dashTowards = UtilsClass.GetMouseWorldPosition();
+            dashTargetPos = (dashTowards - GetPosition()).normalized;
+            if (wallCheckHit)
+                dashFromAWall = true;
+            else
+                dashFromAWall = false;
+            state = State.Dashing;
+            if (!isGrounded)
+                dashFromAir = true;
+            else
+                dashFromAir = false;
+        }
+    }
+
+    IEnumerator DashPause(float dashPauseTime)
+    {
+        yield return new WaitForEndOfFrame();
+        timer += Time.unscaledDeltaTime;
+        if (timer < dashPauseTime)
+            StartCoroutine(DashPause(0.03f));
+        else
+        {
+            Time.timeScale = 1;
+            timer = 0;
+            doneDashing = false;
+        }
+    }
+
+    private void Dash()
+    {
+        float dashSpeed = 40f;
+        if (dashTime > 0)
+        {
+            if (!wallCheckHit || dashFromAWall && !dashStopSide)
+            {
+                rb.velocity = new Vector2(dashTargetPos.x * dashSpeed, dashTargetPos.y * dashSpeed);
+                dashTime -= Time.deltaTime;
+            }
+            else if (!dashFromAWall && wallCheckHit)
+            {
+                dashStopSide = true;
+                state = State.DashBump;
+            }
+            if (dashFromAir && isGrounded)
+            {
+                dashStopBottom = true;
+                state = State.DashBump;
+            }
+
+        }
+        else if (dashTime <= 0)
+        {
+            dashStopSide = false;
+            dashStopBottom = false;
+            rb.velocity = new Vector2(0, 0);
+            doneDashing = true;
+            SetStateNormal();
+        }
+    }
+
+    private void DashBumping()
+    {
+
+        float dashSpeed = 40f;
+        if (dashTime > 0)
+        {
+            if (dashStopBottom)
+            {
+                rb.velocity = new Vector2(dashTargetPos.x * dashSpeed, -dashTargetPos.y * dashSpeed * 1.4f);
+                dashTime -= Time.deltaTime;
+            }
+            if (dashStopSide)
+            {
+                rb.velocity = new Vector2(-dashTargetPos.x * dashSpeed, dashTargetPos.y * dashSpeed);
+                dashTime -= Time.deltaTime;
+            }
+        }
+        else if (dashTime <= 0)
+        {
+            dashStopSide = false;
+            dashStopBottom = false;
+            rb.velocity = new Vector2(0, 0);
+            doneDashing = true;
+            SetStateNormal();
+        }
+    }
+
+    private void Move()
+    {
+        fHorizontalVelocity += Input.GetAxisRaw("Horizontal");
+
+        moveInput = Input.GetAxisRaw("Horizontal");
+        moveInputVertical = Input.GetAxisRaw("Vertical");
+        directionPressed =  new Vector2(moveInput, moveInputVertical);
+
+        if (Mathf.Abs(Input.GetAxisRaw("Horizontal")) < 0.01f)
+            fHorizontalVelocity *= Mathf.Pow(1f - fHorDmpStopping, Time.deltaTime * 10f);
+        else if (Mathf.Sign(Input.GetAxisRaw("Horizontal")) != Mathf.Sign(fHorizontalVelocity))
+            fHorizontalVelocity *= Mathf.Pow(1f - fHorDmpTurning, Time.deltaTime * 10f);
+        else
+            fHorizontalVelocity *= Mathf.Pow(1f - fHorDmpBasic, Time.deltaTime * 10f);
+
+
+        rb.velocity = new Vector2(fHorizontalVelocity, rb.velocity.y);
+
+    }
+
+    void JumpMemory()
+    {
+        isGrounded2 = Physics2D.OverlapCircle(groundCheck.position, checkRadius, whatIsGround);
+        if (isGrounded2)
+            isGrounded = isGrounded2;
+        jumpMemory -= Time.deltaTime;
+        if (Input.GetButtonDown("Jump"))
+        {
+            jumpMemory = 0.2f;
+        }
+        groundedMemory -= Time.deltaTime;
+        if (isGrounded)
+            groundedMemory = 0.1f;
+
+
+    }       // preparing the conditions to the jump
+
+    public void JumpNow1()  // the action of jumping
+    {
+        if ((jumpMemory > 0) && (groundedMemory > 0))
+        {
+            groundedMemory = 0;
+            jumpMemory = 0;
+            rb.velocity = Vector2.up * jumpV;
+        }
+    }
+
+    public Vector2 GetPosition()
+    {
+        return transform.position;
+    }  // gets the position of the player
+
+    public void WallSlideCheck()
+    {
+        wallSlideDirectionInput = Input.GetAxis("Horizontal");
+        if (wallCheckHit && rb.velocity.y <= 0 && !isGrounded && moveInput != 0)
+        {
+            wallSlideDuration = 2f;
+            wallSlideMemory = 0.2f;
+        }
+        else if (moveInput != 1 && moveInput != -1)
+            wallSlideMemory = 0;
+
+        // היי דדי של מחר, תכניס את הבוליאן של הסלידינג לתוך האם למעלה ושתהנ את הפיקס אפדייט
+
+        if (wallSlideMemory > 0)
+            isWallSliding = true;
+        else if (wallSlideMemory <= 0)
+            isWallSliding = false;
+
+    }
+
+    public void WallJumpStart()
+    {
+        if (wallSlideMemory > 0 && Input.GetButtonDown("Jump"))
+        {
+            wallJumpTime = 0.1f;
+            state = State.WallJumping;
+        }
+
+
+    }
+
+    public void WallJumpActive()
+    {
+        wallJumpTime -= Time.deltaTime;
+        wallJumpMemory -= Time.deltaTime;
+        if (Input.GetButtonDown("Jump"))
+        {
+            wallJumpMemory = 0.1f;
+        }
+        if (wallJumpTime > 0 && !wallCheckHit)
+        {
+            if (moveInput > 0)
+            {
+                rb.velocity = new Vector2(20, 15);
+                wallJumpingRightNow = true;
+
+            }
+            else if (moveInput < 0)
+            {
+                rb.velocity = new Vector2(-20, 15);
+                wallJumpingRightNow = true;
+
+            }
+
+        }
+        else if (wallCheckHit && wallJumpTime > 0)
+            wallJumpTime = 0;
+
+        if (wallJumpTime <= 0 && wallJumpMemory <= 0)
+        {
+            rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y);
+            wallJumpingRightNow = false;
+            wallJumpTime = 0.1f;
+            wallJumpMemory = 0.1f;
+            SetStateNormal();
+        }
+
+
+        if ((wallJumpMemory > 0) && wallCheckHit && !wallJumpingRightNow)
+        {
+            wallJumpTime = 0.1f;
+            if (facingRight)
+                rb.velocity = new Vector2(-20, 15);
+            else
+                rb.velocity = new Vector2(20, 15);
+        }
+        else if (wallJumpMemory <= 0)
+        {
+            rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y);
+            SetStateNormal();
+        }
+
+    }
+
+    public void SuperJumpStart()
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            superJumpSpeed = 50f;
+            superJumpTime = 0.1f;
+            if (superJumpTime > 0)
+            {
+                superJumpTime -= Time.deltaTime;
+                rb.velocity = new Vector2(rb.velocity.x, superJumpSpeed);
+            }
+            else if (superJumpTime <= 0)
+            {
+                rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y);
+            }
+        }
+    }
+
+    public void CreateBlock()
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            dashTowards = UtilsClass.GetMouseWorldPosition();
+            GameObject blueObjectSpawn = Instantiate(BlueBlock, dashTowards, Quaternion.Euler(new Vector3(0, 0, 0)));
+        }
+    }
+
+    public void SwitchStates()
+    {
+        if (Input.GetKeyDown(KeyCode.Q))
+            state = State.Blue;
+        if (Input.GetKeyDown(KeyCode.E))
+            state = State.Brown;
+        if (Input.GetKeyDown(KeyCode.W))
+            SetStateNormal();
+    }
+
+    public void ShootStart()
+    {
+        
+        if (Input.GetMouseButtonDown(1) && !canTeleport)
+        {
+            canTeleport = true;
+            Instantiate(bulletPrefab, shootingPoint.position, shootingPoint.rotation);
+            
+        }
+
+    }
+
+}
